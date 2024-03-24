@@ -85,7 +85,6 @@ Use "--verbose --test" to test the IMAP/POP/SMTP endpoints.
 ''')
 ap.add_argument('-v', '--verbose', action='store_true', help='increase verbosity')
 ap.add_argument('-d', '--debug', action='store_true', help='enable debug output')
-ap.add_argument('tokenfile', help='persistent token storage')
 ap.add_argument('-a', '--authorize', action='store_true', help='manually authorize new tokens')
 ap.add_argument('--authflow', help='authcode | localhostauthcode | devicecode')
 ap.add_argument('-t', '--test', action='store_true', help='test IMAP/POP/SMTP endpoints')
@@ -97,6 +96,7 @@ ap.add_argument('--encryption-pipe', type=shlex.split,
                 help='encryption command (string), reads from stdin and writes '
                 'to stdout, suggested: "{}"'.format(
                     " ".join(ENCRYPTION_PIPE)))
+ap.add_argument('--tokenfile', help='persistent storage of token data')
 ap.add_argument('--client-id', type=str, default='',
                 help='Provider id from registration')
 ap.add_argument('--client-secret', type=str, default='',
@@ -110,13 +110,35 @@ ENCRYPTION_PIPE = args.encryption_pipe
 DECRYPTION_PIPE = args.decryption_pipe
 
 token = {}
-path = Path(args.tokenfile)
-if path.exists():
-    if 0o777 & path.stat().st_mode != 0o600:
-        sys.exit('Token file has unsafe mode. Suggest deleting and starting over.')
+if args.tokenfile:
+    path = Path(args.tokenfile)
+
+    if path.exists():
+        if 0o777 & path.stat().st_mode != 0o600:
+            sys.exit('Token file has unsafe mode. Suggest deleting and starting over.')
+        try:
+            sub = subprocess.run(DECRYPTION_PIPE, check=True, input=path.read_bytes(),
+                                 capture_output=True)
+            token = json.loads(sub.stdout)
+        except subprocess.CalledProcessError:
+            sys.exit('Difficulty decrypting token file. Is your decryption agent primed for '
+                     'non-interactive usage, or an appropriate environment variable such as '
+                     'GPG_TTY set to allow interactive agent usage from inside a pipe?')
+
+
+    def writetokenfile():
+        '''Writes global token dictionary into token file.'''
+        if not path.exists():
+            path.touch(mode=0o600)
+        if 0o777 & path.stat().st_mode != 0o600:
+            sys.exit('Token file has unsafe mode. Suggest deleting and starting over.')
+        sub2 = subprocess.run(ENCRYPTION_PIPE, check=True, input=json.dumps(token).encode(),
+                              capture_output=True)
+        path.write_bytes(sub2.stdout)
+
+else:
     try:
-        sub = subprocess.run(DECRYPTION_PIPE, check=True, input=path.read_bytes(),
-                             capture_output=True)
+        sub = subprocess.run(DECRYPTION_PIPE, check=True, capture_output=True)
         token = json.loads(sub.stdout)
     except subprocess.CalledProcessError:
         sys.exit('Difficulty decrypting token file. Is your decryption agent primed for '
@@ -124,15 +146,9 @@ if path.exists():
                  'GPG_TTY set to allow interactive agent usage from inside a pipe?')
 
 
-def writetokenfile():
-    '''Writes global token dictionary into token file.'''
-    if not path.exists():
-        path.touch(mode=0o600)
-    if 0o777 & path.stat().st_mode != 0o600:
-        sys.exit('Token file has unsafe mode. Suggest deleting and starting over.')
-    sub2 = subprocess.run(ENCRYPTION_PIPE, check=True, input=json.dumps(token).encode(),
-                          capture_output=True)
-    path.write_bytes(sub2.stdout)
+    def writetokenfile():
+        '''Send global token dictionary to encryption process.'''
+        subprocess.run(ENCRYPTION_PIPE, check=True, input=json.dumps(token).encode())
 
 
 if args.debug:
