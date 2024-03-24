@@ -102,7 +102,7 @@ ap.add_argument('--encryption-pipe', type=shlex.split,
 ap.add_argument('--tokenfile', help='persistent storage of token data')
 ap.add_argument('--client-id', type=str, default='',
                 help='Provider id from registration')
-ap.add_argument('--client-secret', type=str, default='',
+ap.add_argument('--client-secret', type=str, default=None,
                 help='(optional) Provider secret from registration')
 ap.add_argument('--provider', type=str, choices=registrations.keys(),
                 help='Specify provider to use.')
@@ -210,7 +210,8 @@ if not token:
     token['access_token_expiration'] = ''
     token['refresh_token'] = ''
     token['client_id'] = args.client_id or input('Client ID: ')
-    token['client_secret'] = args.client_secret or input('Client secret: ')
+    token['client_secret'] = \
+        input('Client secret: ') if args.client_secret is None else args.client_secret
     writetokenfile()
 
 if token['registration'] not in registrations:
