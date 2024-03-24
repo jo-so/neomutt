@@ -22,6 +22,7 @@
 '''Mutt OAuth2 token management'''
 
 import sys
+import os
 import json
 import argparse
 import urllib.parse
@@ -88,6 +89,8 @@ ap.add_argument('-d', '--debug', action='store_true', help='enable debug output'
 ap.add_argument('-a', '--authorize', action='store_true', help='manually authorize new tokens')
 ap.add_argument('--authflow', help='authcode | localhostauthcode | devicecode')
 ap.add_argument('-t', '--test', action='store_true', help='test IMAP/POP/SMTP endpoints')
+ap.add_argument('--libsecret', metavar='ID', nargs='?', const='',
+                help='use libsecret as token storage with optional ID')
 ap.add_argument('--decryption-pipe', type=shlex.split, default=DECRYPTION_PIPE,
                 help='decryption command (string), reads from stdin and writes '
                 'to stdout, default: "{}"'.format(
@@ -110,9 +113,46 @@ ENCRYPTION_PIPE = args.encryption_pipe
 DECRYPTION_PIPE = args.decryption_pipe
 
 token = {}
-if args.tokenfile:
-    path = Path(args.tokenfile)
+if args.libsecret is not None:
+    import gi
 
+    gi.require_version('Secret', '1')
+
+    from gi.repository import Secret
+
+    LIBSECRET_SCHEMA = Secret.Schema.new(
+        "mutt_oauth2.py",
+        Secret.SchemaFlags.NONE,
+        {
+            "id": Secret.SchemaAttributeType.STRING,
+        }
+    )
+
+    data = Secret.password_lookup_sync(
+        LIBSECRET_SCHEMA,
+        { "id": args.libsecret or '' },
+        None
+    )
+
+    if data:
+        token = json.loads(data)
+    elif args.debug:
+        print('No token data in libsecret storage')
+
+    def writetokenfile():
+        '''Writes global token dictionary into libsecret storage.'''
+
+        Secret.password_store_sync(
+            LIBSECRET_SCHEMA,
+            { "id": args.libsecret },
+            os.environ.get('LIBSECRET_COLLECTION') or Secret.COLLECTION_DEFAULT,
+            "mutt-oauth2" + (' ' + args.libsecret if args.libsecret else ''),
+            json.dumps(token),
+            None
+        )
+
+elif args.tokenfile:
+    path = Path(args.tokenfile)
     if path.exists():
         if 0o777 & path.stat().st_mode != 0o600:
             sys.exit('Token file has unsafe mode. Suggest deleting and starting over.')
@@ -156,8 +196,8 @@ if args.debug:
 if not token:
     if not args.authorize:
         sys.exit('You must run script with "--authorize" at least once.')
-    if not ENCRYPTION_PIPE:
-        sys.exit("You need to provide a suitable --encryption-pipe setting")
+    if args.libsecret is None and not ENCRYPTION_PIPE:
+        sys.exit("You need to provide --libsecret or a suitable --encryption-pipe setting")
     print('', )
     token['registration'] = args.provider or input(
         'Available app and endpoint registrations: {regs}\nOAuth2 registration: '.format(
